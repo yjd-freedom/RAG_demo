@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>YOLO + RAG 实时物体识别系统</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      padding: 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      color: #1890ff;
+      font-size: 24px;
+    }
+
+    .main-layout {
+      display: flex;
+      gap: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+      flex-wrap: wrap;
+    }
+
+    .video-section {
+      flex: 1;
+      min-width: 500px;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .video-section img {
+      width: 100%;
+      display: block;
+    }
+
+    .info-section {
+      flex: 0 0 300px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .card h2 {
+      font-size: 16px;
+      margin-bottom: 12px;
+      color: #555;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 6px;
+    }
+
+    .similarity {
+      color: #fa8c16;
+      font-weight: bold;
+      margin-right: 8px;
+    }
+
+    #cropImage {
+      width: 100%;
+      height: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+
+    #descriptionText {
+      min-height: 80px;
+      line-height: 1.5;
+      color: #333;
+      word-break: break-word;
+      white-space: pre-wrap; /* ✅ 支持换行 */
+      overflow-y: auto;     /* ✅ 可滚动 */
+      max-height: 300px;
+      padding: 8px;
+      background: #f9f9f9;
+      border: 1px solid #eee;
+      border-radius: 4px;
+    }
+
+    .empty {
+      color: #998;
+      font-style: italic;
+      text-align: center;
+      padding: 20px 0;
+    }
+
+    @media (max-width: 768px) {
+      .main-layout {
+        flex-direction: column;
+      }
+      .video-section {
+        min-width: auto;
+      }
+      .info-section {
+        flex: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 YOLO + RAG 实时物体识别系统</h1>
+  </div>
+
+  <div class="main-layout">
+    <!-- 左侧：视频流 -->
+    <div class="video-section">
+      <img id="videoStream" src="/video_feed" alt="实时视频流" />
+    </div>
+
+    <!-- 右侧：信息面板 -->
+    <div class="info-section">
+      <!-- 上：YOLO 检测结果（带裁剪图） -->
+      <div class="card">
+        <h2>YOLO 在摄像头中捕捉的带标注物体</h2>
+        <div id="detectionsList">
+          <div class="empty">暂无检测结果</div>
+        </div>
+      </div>
+
+      <!-- 下：RAG 描述 -->
+      <div class="card">
+        <h2>检索出来的对物体的描述</h2>
+        <div id="descriptionText" class="empty">等待检测到物体...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const videoStream = document.getElementById('videoStream');
+    const detectionsList = document.getElementById('detectionsList');
+    const descriptionText = document.getElementById('descriptionText');
+
+    // 缓存有效数据
+    let lastValidDetections = null;
+    let lastValidDescription = null;
+
+    async function updateData() {
+      try {
+        const res = await fetch('/api/detections');
+        if (!res.ok) throw new Error('API 请求失败');
+        const data = await res.json();
+
+        const hasValidData = Array.isArray(data) && data.length > 0;
+
+        if (hasValidData) {
+          // 更新缓存
+          lastValidDetections = data.slice(0, 3);
+          lastValidDescription = data[0].description;
+
+          // 渲染检测列表（带裁剪图）
+          renderDetectionWithCrop(data);
+
+          // 渲染完整描述
+          descriptionText.textContent = lastValidDescription;
+          descriptionText.className = '';
+        } else {
+          // 无新数据，保留上次内容
+          if (!lastValidDetections) {
+            detectionsList.innerHTML = '<div class="empty">暂无检测结果</div>';
+            descriptionText.textContent = '等待检测到物体...';
+            descriptionText.className = 'empty';
+          }
+        }
+      } catch (err) {
+        console.error('获取数据失败:', err);
+        if (!lastValidDetections) {
+          detectionsList.innerHTML = '<div class="empty">❌ 加载失败</div>';
+          descriptionText.textContent = '服务异常，请检查后端';
+          descriptionText.className = 'empty';
+        }
+      }
+    }
+
+    function renderDetectionWithCrop(detections) {
+      const firstItem = detections[0];
+      const bbox = firstItem.bbox;
+      const [x1, y1, x2, y2] = bbox;
+      const label = firstItem.description.split('是')[0]; // 提取角色名
+
+      // 获取原始图像尺寸（未缩放）
+      const naturalWidth = videoStream.naturalWidth || videoStream.clientWidth;
+      const naturalHeight = videoStream.naturalHeight || videoStream.clientHeight;
+
+      // 创建 canvas 并绘制原图
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // 设置 canvas 大小为原始图像尺寸
+      canvas.width = naturalWidth;
+      canvas.height = naturalHeight;
+
+      // 绘制原图到 canvas
+      ctx.drawImage(videoStream, 0, 0, canvas.width, canvas.height);
+
+      // 裁剪目标区域（使用原始坐标）
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = x2 - x1;
+      cropCanvas.height = y2 - y1;
+      const cropCtx = cropCanvas.getContext('2d');
+      cropCtx.drawImage(canvas, x1, y1, cropCanvas.width, cropCanvas.height);
+
+      // 创建 image 元素显示裁剪图
+      const cropImg = document.createElement('img');
+      cropImg.src = cropCanvas.toDataURL();
+      cropImg.style.maxWidth = '100%';
+
+      // 构建 HTML 内容
+      const content = `
+        <div style="font-size: 14px; margin-bottom: 8px;">
+          <span class="similarity">相似度: ${firstItem.similarity.toFixed(3)}</span>
+          ${label}
+        </div>
+        ${cropImg.outerHTML}
+      `;
+
+      detectionsList.innerHTML = content;
+    }
+
+    // 初始加载 + 每 200ms 更新（提升响应速度）
+    updateData();
+    setInterval(updateData, 200); // ⬅️ 从 1000 改为 200ms
+
+    // 视频流错误处理
+    videoStream.onerror = () => {
+      alert('⚠️ 无法加载视频流，请确保摄像头已启用且后端运行正常。');
+    };
+  </script>
+</body>
+</html>
