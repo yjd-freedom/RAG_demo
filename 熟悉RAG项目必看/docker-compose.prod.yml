@@ -1,0 +1,15 @@
+# docker-compose.prod.yml —— 生产环境（无挂载、独立镜像）
+services:
+  web:
+    build: .                          # 从当前目录的 Dockerfile 构建
+    image: yolo-rag-web:latest        # 构建后打上明确标签
+    ports:
+      - "8000:8000"                   # 外部:内部端口
+    environment:
+      - TZ=Asia/Shanghai
+    # ⚠️ 生产环境通常不需要 extra_hosts（除非 Milvus 在宿主机）
+    # 如果 Milvus 也在 Compose 中，则不需要此行
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    restart: unless-stopped           # 容器崩溃自动重启
+    user: "65534:65534"               # 使用 nobody 用户（UID/GID for nobody in alpine/slim）

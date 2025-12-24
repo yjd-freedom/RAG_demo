@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>手办数据管理</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        h1, h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 0 5px 5px 0;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+            border: none;
+        }
+        .btn-success {
+            background: #28a745;
+            color: white;
+            border: none;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+            border: none;
+        }
+        .folder-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .folder-item:last-child {
+            border-bottom: none;
+        }
+        #result, #uploadResult {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            display: block !important;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block !important;
+        }
+        .info {
+            color: #6c757d;
+            font-size: 13px;
+            margin-top: 5px;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+            width: 100%;
+        }
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>📁 手办数据管理面板</h1>
+
+    <!-- 上传区域 -->
+    <div class="section">
+        <h3>📤 上传压缩包</h3>
+        <p>支持格式：<code>.zip</code>, <code>.7z</code>, <code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.bz2</code></p>
+        <p style="color: #6c757d; font-size: 13px;">
+            ⚠️ 注意：不支持 RAR 格式，请使用 ZIP、TAR 或 7z 上传。
+        </p>
+        <input type="file" id="zipFile" accept=".zip,.7z,.tar,.tar.gz,.tgz,.tar.bz2">
+        <button class="btn-success" id="uploadBtn" onclick="uploadZip()">上传</button>
+        <div id="uploadResult"></div>
+    </div>
+
+    <!-- 列表区域 -->
+    <div class="section">
+        <h3>📂 已上传的手办文件夹</h3>
+        <button class="btn-primary" onclick="loadFolders()">🔄 刷新列表</button>
+        <div id="folderList" style="margin-top: 15px;">
+            <p>正在加载...</p>
+        </div>
+    </div>
+
+    <script>
+        async function uploadZip() {
+            const fileInput = document.getElementById('zipFile');
+            const file = fileInput.files[0];
+            const resultDiv = document.getElementById('uploadResult');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            if (!file) {
+                showResult(resultDiv, '⚠️ 请选择一个压缩文件', false);
+                return;
+            }
+
+            // 检查扩展名（前端二次校验）
+            const allowedExts = ['.zip', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.bz2'];
+            const fileName = file.name.toLowerCase();
+            const hasValidExt = allowedExts.some(ext => fileName.endsWith(ext));
+            if (!hasValidExt) {
+                showResult(resultDiv, `❌ 不支持的文件格式。请使用：${allowedExts.join(', ')}`, false);
+                return;
+            }
+
+            // 显示上传中
+            uploadBtn.textContent = '上传中...';
+            uploadBtn.classList.add('loading');
+            resultDiv.className = '';
+            resultDiv.style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/upload_folder', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    showResult(resultDiv, `✅ 上传成功！已解压到文件夹：${data.folder_name}`, true);
+                    fileInput.value = ''; // 清空选择
+                    loadFolders(); // 自动刷新列表
+                } else {
+                    const msg = data.detail || JSON.stringify(data);
+                    showResult(resultDiv, `❌ 上传失败：${msg}`, false);
+                }
+            } catch (e) {
+                showResult(resultDiv, `🌐 网络错误：${e.message}`, false);
+            } finally {
+                uploadBtn.textContent = '上传';
+                uploadBtn.classList.remove('loading');
+            }
+        }
+
+        async function loadFolders() {
+            const listDiv = document.getElementById('folderList');
+            listDiv.innerHTML = '<p>正在加载...</p>';
+
+            try {
+                const res = await fetch('/list_folders');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+
+                if (!data.folders || data.folders.length === 0) {
+                    listDiv.innerHTML = '<p>📦 暂无手办数据</p>';
+                    return;
+                }
+
+                listDiv.innerHTML = data.folders.map(f => `
+                    <div class="folder-item">
+                        <div>
+                            <strong>${escapeHtml(f.name)}</strong>
+                            <div class="info">
+                                ${f.image_count} 张图片 ·
+                                ${f.text_count} 个文本文件 ·
+                                创建时间: ${new Date(f.created_time * 1000).toLocaleString()}
+                            </div>
+                        </div>
+                        <button class="btn-danger" onclick="deleteFolder('${escapeHtmlAttr(f.name)}')">🗑️ 删除</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                listDiv.innerHTML = `<p style="color:#d32f2f">❌ 加载失败：${e.message}</p>`;
+            }
+        }
+
+        async function deleteFolder(name) {
+            if (!confirm(`⚠️ 确定要永久删除 "${name}" 吗？此操作不可恢复！`)) return;
+
+            try {
+                const res = await fetch(`/delete_folder/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+                if (res.ok) {
+                    alert('✅ 删除成功');
+                    loadFolders();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert('❌ 删除失败：' + (err.detail || '未知错误'));
+                }
+            } catch (e) {
+                alert('🌐 请求失败：' + e.message);
+            }
+        }
+
+        function showResult(div, msg, success) {
+            div.className = success ? 'success' : 'error';
+            div.innerText = msg;
+            div.style.display = 'block';
+        }
+
+        // 安全转义（防 XSS）
+        function escapeHtml(text) {
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+        function escapeHtmlAttr(str) {
+            return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // 页面加载时自动列出
+        window.addEventListener('DOMContentLoaded', loadFolders);
+    </script>
+</body>
+</html>
